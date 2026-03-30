@@ -1,0 +1,112 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id           String       @id @default(cuid())
+  name         String
+  email        String       @unique
+  password     String
+  role         Role         @default(ENGINEER)
+  department   String?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+  orderStages  OrderStage[]
+  auditLogs    AuditLog[]
+
+  @@map("users")
+}
+
+model Customer {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  email     String?
+  phone     String?
+  address   String?
+  orders    Order[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("customers")
+}
+
+model Order {
+  id             String        @id @default(cuid())
+  customerId     String?
+  projectName    String
+  poNumber       String        @unique
+  orderDate      DateTime
+  deadline       DateTime
+  priority       Priority      @default(MEDIUM)
+  overallStatus  String        @default("NOT_STARTED")
+  notes          String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  stages         OrderStage[]
+  auditLogs      AuditLog[]
+
+  customer       Customer?     @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  @@map("orders")
+}
+
+model OrderStage {
+  id          String      @id @default(cuid())
+  orderId     String
+  stageName   String
+  sequence    Int         @default(0)
+  startDate   DateTime?
+  endDate     DateTime?
+  status      StageStatus @default(NOT_STARTED)
+  assignedTo  String?
+  remarks     String?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  order       Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  assignedUser User?      @relation(fields: [assignedTo], references: [id], onDelete: SetNull)
+
+  @@unique([orderId, stageName])
+  @@map("order_stages")
+}
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  orderId     String?
+  userId      String?
+  action      String
+  entityType  String
+  entityId    String
+  oldValues   Json?
+  newValues   Json?
+  createdAt   DateTime @default(now())
+
+  order       Order?   @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@map("audit_logs")
+}
+
+enum Role {
+  ADMIN
+  MANAGER
+  ENGINEER
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum StageStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  COMPLETED
+  DELAYED
+}
