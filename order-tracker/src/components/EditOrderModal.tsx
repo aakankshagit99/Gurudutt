@@ -1,48 +1,46 @@
 "use client";
 
 import { useState, useTransition, useEffect } from "react";
-import { createOrder, getCustomers, getAvailableStages, addAvailableStage } from "@/lib/actions";
+import { updateOrder, getCustomers } from "@/lib/actions";
 import { Priority } from "@prisma/client";
-import { X, Package, Loader2, Check } from "lucide-react";
+import { X, Package, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import Link from "next/link";
 
 interface Props {
+  order: {
+    id: string;
+    customerId: string | null;
+    projectName: string;
+    poNumber: string;
+    orderDate: Date | string;
+    deadline: Date | string;
+    priority: Priority;
+    notes: string | null;
+  };
   onClose: () => void;
+  onSuccess: () => void;
 }
 
-export default function CreateOrderModal({ onClose }: Props) {
+export default function EditOrderModal({ order, onClose, onSuccess }: Props) {
   const [isPending, startTransition] = useTransition();
   const [customers, setCustomers] = useState<Awaited<ReturnType<typeof getCustomers>>>([]);
-  const [availableStages, setAvailableStages] = useState<string[]>([]);
-  const [selectedStages, setSelectedStages] = useState<string[]>([]);
   const [form, setForm] = useState({
-    customerId: "",
-    projectName: "",
-    poNumber: "",
-    orderDate: new Date().toISOString().split("T")[0],
-    deadline: "",
-    priority: "MEDIUM" as Priority,
-    notes: "",
+    customerId: order.customerId || "",
+    projectName: order.projectName,
+    poNumber: order.poNumber,
+    orderDate: new Date(order.orderDate).toISOString().split("T")[0],
+    deadline: new Date(order.deadline).toISOString().split("T")[0],
+    priority: order.priority,
+    notes: order.notes || "",
   });
 
   useEffect(() => {
     getCustomers().then(setCustomers);
-    getAvailableStages().then((stages) => {
-      setAvailableStages(stages);
-      // Default stages (first few or all)
-      setSelectedStages(stages.slice(0, 5));
-    });
   }, []);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     setForm((f) => ({ ...f, [e.target.name]: e.target.value }));
-  };
-
-  const toggleStage = (stage: string) => {
-    setSelectedStages((prev) =>
-      prev.includes(stage) ? prev.filter((s) => s !== stage) : [...prev, stage]
-    );
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -51,17 +49,14 @@ export default function CreateOrderModal({ onClose }: Props) {
       toast.error("Please select a customer");
       return;
     }
-    if (selectedStages.length === 0) {
-      toast.error("Please select at least one stage");
-      return;
-    }
     startTransition(async () => {
       try {
-        await createOrder({ ...form, stageNames: selectedStages });
-        toast.success("Order created successfully!");
+        await updateOrder(order.id, form);
+        toast.success("Order updated successfully!");
+        onSuccess();
         onClose();
       } catch (err: unknown) {
-        toast.error(err instanceof Error ? err.message : "Failed to create order");
+        toast.error(err instanceof Error ? err.message : "Failed to update order");
       }
     });
   };
@@ -74,7 +69,7 @@ export default function CreateOrderModal({ onClose }: Props) {
             <div className="w-9 h-9 bg-blue-500/15 border border-blue-500/25 rounded-xl flex items-center justify-center">
               <Package className="w-4 h-4 text-blue-400" />
             </div>
-            <h2 className="text-lg font-semibold text-white">New Order</h2>
+            <h2 className="text-lg font-semibold text-white">Edit Order</h2>
           </div>
           <button onClick={onClose} className="text-slate-500 hover:text-slate-300 transition-colors">
             <X className="w-5 h-5" />
@@ -135,66 +130,6 @@ export default function CreateOrderModal({ onClose }: Props) {
           </div>
 
           <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <label className="block text-xs font-medium text-slate-400 uppercase tracking-wider text-blue-400">Select Production Stages</label>
-              <div className="flex gap-3">
-                <button type="button" onClick={() => setSelectedStages(availableStages)} className="text-[10px] text-slate-500 hover:text-blue-400 uppercase tracking-widest font-bold">Select All</button>
-                <button type="button" onClick={() => setSelectedStages([])} className="text-[10px] text-slate-500 hover:text-red-400 uppercase tracking-widest font-bold">Clear All</button>
-              </div>
-            </div>
-            
-            {/* Custom Stage input */}
-            <div className="mb-3">
-              <input
-                type="text"
-                placeholder="Type custom stage and press Enter to add..."
-                className="input-field text-xs py-1.5"
-                onKeyDown={async (e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    const val = e.currentTarget.value.trim();
-                    if (!val) return;
-                    try {
-                      const updated = await addAvailableStage(val);
-                      setAvailableStages(updated);
-                      const matchedName = updated.find(s => s.toLowerCase() === val.toLowerCase()) || val;
-                      if (!selectedStages.includes(matchedName)) {
-                        setSelectedStages(prev => [...prev, matchedName]);
-                      }
-                      e.currentTarget.value = "";
-                      toast.success(`Stage "${matchedName}" created!`);
-                    } catch (err: any) {
-                      toast.error(err.message || "Failed to add stage");
-                    }
-                  }
-                }}
-              />
-            </div>
-
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 p-3 bg-slate-900/50 rounded-xl border border-slate-800 max-h-48 overflow-y-auto custom-scrollbar">
-              {availableStages.map((stage) => (
-                <button
-                  key={stage}
-                  type="button"
-                  onClick={() => toggleStage(stage)}
-                  className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs transition-all border ${
-                    selectedStages.includes(stage)
-                      ? "bg-blue-600/20 border-blue-500/50 text-blue-100"
-                      : "bg-slate-800/50 border-slate-700 text-slate-400 hover:bg-slate-800 hover:text-slate-300"
-                  }`}
-                >
-                  <div className={`w-3.5 h-3.5 rounded-sm border flex items-center justify-center ${
-                    selectedStages.includes(stage) ? "bg-blue-500 border-transparent" : "border-slate-600"
-                  }`}>
-                    {selectedStages.includes(stage) && <Check className="w-2.5 h-2.5 text-white" />}
-                  </div>
-                  <span className="truncate">{stage}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div>
             <label className="block text-xs font-medium text-slate-400 mb-1.5 uppercase tracking-wider">Notes</label>
             <textarea name="notes" value={form.notes} onChange={handleChange} className="input-field resize-none h-20" placeholder="Any relevant notes..." />
           </div>
@@ -202,7 +137,7 @@ export default function CreateOrderModal({ onClose }: Props) {
           <div className="flex items-center gap-3 pt-2">
             <button type="button" onClick={onClose} className="btn-secondary flex-1">Cancel</button>
             <button type="submit" disabled={isPending} className="btn-primary flex-1 justify-center">
-              {isPending ? <><Loader2 className="w-4 h-4 animate-spin" /> Creating...</> : "Create Order"}
+              {isPending ? <><Loader2 className="w-4 h-4 animate-spin" /> Saving...</> : "Save Changes"}
             </button>
           </div>
         </form>

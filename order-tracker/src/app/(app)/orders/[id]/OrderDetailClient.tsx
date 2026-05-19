@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import StageEditModal from "@/components/StageEditModal";
+import EditOrderModal from "@/components/EditOrderModal";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
@@ -62,6 +63,7 @@ const stageIcons: Record<string, string> = {
 export default function OrderDetailClient({ order: initialOrder, users }: { order: Order; users: UserList }) {
   const [order, setOrder] = useState(initialOrder);
   const [editStage, setEditStage] = useState<Order["stages"][0] | null>(null);
+  const [showEditOrder, setShowEditOrder] = useState(false);
   const [activeTab, setActiveTab] = useState<"stages" | "audit">("stages");
   const [isPending, startTransition] = useTransition();
   const [availableStages, setAvailableStages] = useState<string[]>([]);
@@ -134,6 +136,12 @@ export default function OrderDetailClient({ order: initialOrder, users }: { orde
             <p className="text-slate-400 mt-0.5">{order.customer?.name || "No Customer"}</p>
           </div>
           <div className="flex items-center gap-3">
+            <button 
+              onClick={() => setShowEditOrder(true)} 
+              className="btn-secondary py-1.5 px-3 text-xs flex items-center gap-1.5"
+            >
+              <Edit2 className="w-3.5 h-3.5" /> Edit Order
+            </button>
             <span className={`status-badge ${getStatusColor(order.overallStatus)} text-sm px-3 py-1`}>
               {getStatusLabel(order.overallStatus)}
             </span>
@@ -363,6 +371,14 @@ export default function OrderDetailClient({ order: initialOrder, users }: { orde
             setEditStage(null);
             refreshOrder();
           }}
+        />
+      )}
+
+      {showEditOrder && (
+        <EditOrderModal
+          order={order}
+          onClose={() => setShowEditOrder(false)}
+          onSuccess={refreshOrder}
         />
       )}
     </div>

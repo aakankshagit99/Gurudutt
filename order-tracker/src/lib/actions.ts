@@ -419,3 +419,136 @@ export async function deleteCustomer(id: string) {
   revalidatePath("/customers");
   return { success: true };
 }
+
+export async function addAvailableStage(name: string) {
+  await requireAuth();
+  const trimmed = name.trim();
+  if (!trimmed) throw new Error("Stage name cannot be empty");
+
+  const configPath = path.join(process.cwd(), "src/config/stages.json");
+  let stages: string[] = [];
+  try {
+    const data = fs.readFileSync(configPath, "utf8");
+    stages = JSON.parse(data);
+  } catch (err) {
+    stages = ["ORDER_RECEIVED", "DESIGN", "PROCUREMENT", "MANUFACTURING", "DISPATCH"];
+  }
+
+  const exists = stages.some((s) => s.toLowerCase() === trimmed.toLowerCase());
+  if (!exists) {
+    stages.push(trimmed);
+    fs.writeFileSync(configPath, JSON.stringify(stages), "utf8");
+  }
+
+  revalidatePath("/dashboard");
+  revalidatePath("/orders");
+  revalidatePath("/kanban");
+  return stages;
+}
+
+export async function moveOrderToStatus(orderId: string, targetStatus: string) {
+  await requireAuth();
+
+  const order = await prisma.order.findUnique({
+    where: { id: orderId },
+    include: { stages: { orderBy: { sequence: "asc" } } },
+  });
+  if (!order) throw new Error("Order not found");
+
+  const availableStages = await getAvailableStages();
+
+  if (targetStatus === "COMPLETED") {
+    await prisma.orderStage.updateMany({
+      where: { orderId },
+      data: { status: "COMPLETED", endDate: new Date() },
+    });
+    await prisma.order.update({
+      where: { id: orderId },
+      data: { overallStatus: "COMPLETED" },
+    });
+
+    await createAuditLog({
+      action: "UPDATE_STATUS",
+      entityType: "Order",
+      entityId: orderId,
+      orderId,
+      newValues: { overallStatus: "COMPLETED" },
+    });
+
+    revalidatePath("/dashboard");
+    revalidatePath("/orders");
+    revalidatePath("/kanban");
+    revalidatePath(`/orders/${orderId}`);
+    return { success: true };
+  }
+
+  let targetStage = order.stages.find((s) => s.stageName === targetStatus);
+
+  if (!targetStage) {
+    const availableIndex = availableStages.indexOf(targetStatus);
+    const sequence = availableIndex !== -1 ? availableIndex : order.stages.length;
+
+    targetStage = await prisma.orderStage.create({
+      data: {
+        orderId,
+        stageName: targetStatus,
+        sequence,
+        status: "IN_PROGRESS",
+        startDate: new Date(),
+      },
+    });
+
+    order.stages = await prisma.orderStage.findMany({
+      where: { orderId },
+      orderBy: { sequence: "asc" },
+    });
+  }
+
+  for (const stage of order.stages) {
+    if (stage.stageName === targetStatus) {
+      await prisma.orderStage.update({
+        where: { id: stage.id },
+        data: { status: "IN_PROGRESS", startDate: stage.startDate || new Date(), endDate: null },
+      });
+    } else if (stage.sequence < targetStage.sequence) {
+      if (stage.status !== "COMPLETED") {
+        await prisma.orderStage.update({
+          where: { id: stage.id },
+          data: { status: "COMPLETED", endDate: stage.endDate || new Date() },
+        });
+      }
+    } else if (stage.sequence > targetStage.sequence) {
+      if (stage.status !== "NOT_STARTED") {
+        await prisma.orderStage.update({
+          where: { id: stage.id },
+          data: { status: "NOT_STARTED", startDate: null, endDate: null },
+        });
+      }
+    }
+  }
+
+  const updatedStages = await prisma.orderStage.findMany({
+    where: { orderId },
+    orderBy: { sequence: "asc" },
+  });
+  const newOverallStatus = calculateOverallStatus(updatedStages.map((s) => ({ status: s.status, stageName: s.stageName })));
+
+  await prisma.order.update({
+    where: { id: orderId },
+    data: { overallStatus: newOverallStatus },
+  });
+
+  await createAuditLog({
+    action: "UPDATE_STATUS",
+    entityType: "Order",
+    entityId: orderId,
+    orderId,
+    newValues: { overallStatus: newOverallStatus },
+  });
+
+  revalidatePath("/dashboard");
+  revalidatePath("/orders");
+  revalidatePath("/kanban");
+  revalidatePath(`/orders/${orderId}`);
+  return { success: true };
+}

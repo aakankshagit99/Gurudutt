@@ -5,10 +5,10 @@ import { getOrders } from "@/lib/actions";
 import { formatDate, getDaysRemaining, getStatusColor, getStatusLabel, getPriorityColor } from "@/lib/utils";
 import {
   Plus, Search, Download, RefreshCw,
-  ChevronLeft, ChevronRight, ExternalLink, Zap
+  ChevronLeft, ChevronRight, ExternalLink, Zap, Edit2
 } from "lucide-react";
 import Link from "next/link";
-import CreateOrderModal from "@/components/CreateOrderModal";
+import EditOrderModal from "@/components/EditOrderModal";
 import * as XLSX from "xlsx";
 
 type Order = Awaited<ReturnType<typeof getOrders>>["orders"][0];
@@ -23,7 +23,7 @@ export default function OrdersClient({ initialOrders, initialTotal }: {
   const [status, setStatus] = useState("");
   const [priority, setPriority] = useState("");
   const [page, setPage] = useState(1);
-  const [showCreate, setShowCreate] = useState(false);
+  const [editOrder, setEditOrder] = useState<Order | null>(null);
   const [isPending, startTransition] = useTransition();
   const pageSize = 20;
 
@@ -97,9 +97,9 @@ export default function OrdersClient({ initialOrders, initialTotal }: {
           <button onClick={handleExport} className="btn-secondary" title="Export to Excel">
             <Download className="w-4 h-4" /> Export
           </button>
-          <button onClick={() => setShowCreate(true)} className="btn-primary">
+          <Link href="/orders/new" className="btn-primary">
             <Plus className="w-4 h-4" /> New Order
-          </button>
+          </Link>
         </div>
       </div>
 
@@ -214,13 +214,22 @@ export default function OrdersClient({ initialOrders, initialTotal }: {
                       </span>
                     </td>
                     <td>
-                      <Link
-                        href={`/orders/${order.id}`}
-                        className="text-slate-500 hover:text-blue-400 transition-colors"
-                        title="View order"
-                      >
-                        <ExternalLink className="w-4 h-4" />
-                      </Link>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => setEditOrder(order)}
+                          className="text-slate-500 hover:text-blue-400 transition-colors"
+                          title="Edit order"
+                        >
+                          <Edit2 className="w-4 h-4" />
+                        </button>
+                        <Link
+                          href={`/orders/${order.id}`}
+                          className="text-slate-500 hover:text-blue-400 transition-colors"
+                          title="View order"
+                        >
+                          <ExternalLink className="w-4 h-4" />
+                        </Link>
+                      </div>
                     </td>
                   </tr>
                 );
@@ -256,7 +265,13 @@ export default function OrdersClient({ initialOrders, initialTotal }: {
         </div>
       )}
 
-      {showCreate && <CreateOrderModal onClose={() => { setShowCreate(false); fetchOrders(); }} />}
+      {editOrder && (
+        <EditOrderModal
+          order={editOrder}
+          onClose={() => setEditOrder(null)}
+          onSuccess={() => fetchOrders()}
+        />
+      )}
     </div>
   );
 }
