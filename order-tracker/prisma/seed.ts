@@ -1,4 +1,4 @@
-import { prisma } from "@/lib/prisma";
+import { prisma } from "../src/lib/prisma";
 import bcrypt from "bcryptjs";
 
 const DEFAULT_STAGES = [
@@ -145,17 +145,11 @@ async function seed() {
         priority: o.priority,
         overallStatus: o.overallStatus,
         notes: o.notes,
-        stages: {
-          create: DEFAULT_STAGES.map((stageName, idx) => ({
-            stageName,
-            sequence: idx,
-            status: "NOT_STARTED",
-          })),
-        },
       },
     });
 
-    // Update some stages to reflect the overallStatus
+    // Create 2 drawings for this PO
+    const drawingNumbers = [`${o.poNumber}-DRW-01`, `${o.poNumber}-DRW-02`];
     const statusIndex = [
       "ORDER_RECEIVED",
       "DESIGN",
@@ -165,25 +159,64 @@ async function seed() {
       "COMPLETED",
     ].indexOf(o.overallStatus);
 
-    for (let i = 0; i < DEFAULT_STAGES.length; i++) {
-      const stageName = DEFAULT_STAGES[i];
-      let status: "NOT_STARTED" | "IN_PROGRESS" | "COMPLETED" | "DELAYED" = "NOT_STARTED";
+    for (let d = 0; d < drawingNumbers.length; d++) {
+      const drawingNumber = drawingNumbers[d];
+      
+      // Let's vary the progress slightly between the two drawings
+      // e.g. drawing 2 is slightly behind drawing 1
+      const drawingStatusIndex = Math.max(0, statusIndex - d);
+      const drawingStatus = DEFAULT_STAGES[Math.min(drawingStatusIndex, DEFAULT_STAGES.length - 1)];
 
-      if (i < statusIndex) status = "COMPLETED";
-      else if (i === statusIndex) status = o.overallStatus === "COMPLETED" ? "COMPLETED" : "IN_PROGRESS";
-
-      await prisma.orderStage.updateMany({
-        where: { orderId: order.id, stageName },
+      const drawing = await prisma.drawing.create({
         data: {
-          status,
-          assignedTo: i % 2 === 0 ? engineer.id : manager.id,
-          startDate: i <= statusIndex ? new Date(o.orderDate.getTime() + i * 7 * 86400000) : null,
-          endDate: i < statusIndex ? new Date(o.orderDate.getTime() + (i + 1) * 7 * 86400000) : null,
+          orderId: order.id,
+          drawingNumber,
+          status: o.overallStatus === "COMPLETED" ? "COMPLETED" : drawingStatus,
+          stages: {
+            create: DEFAULT_STAGES.map((stageName, idx) => ({
+              stageName,
+              sequence: idx,
+              status: "NOT_STARTED",
+            })),
+          },
         },
       });
+
+      // Update stages for this drawing
+      for (let i = 0; i < DEFAULT_STAGES.length; i++) {
+        const stageName = DEFAULT_STAGES[i];
+        let status: "NOT_STARTED" | "IN_PROGRESS" | "COMPLETED" | "DELAYED" = "NOT_STARTED";
+
+        if (o.overallStatus === "COMPLETED") {
+          status = "COMPLETED";
+        } else if (i < drawingStatusIndex) {
+          status = "COMPLETED";
+        } else if (i === drawingStatusIndex) {
+          status = "IN_PROGRESS";
+        }
+
+        // Generate dynamic stage deadline: orderDate + (i + 1) * 14 days
+        const stageDeadline = new Date(o.orderDate.getTime() + (i + 1) * 14 * 86400000);
+
+        // If stage is not completed and deadline is in the past, it's DELAYED
+        if (status !== "COMPLETED" && stageDeadline < new Date()) {
+          status = "DELAYED";
+        }
+
+        await prisma.drawingStage.updateMany({
+          where: { drawingId: drawing.id, stageName },
+          data: {
+            status,
+            assignedTo: (i + d) % 2 === 0 ? engineer.id : manager.id,
+            startDate: i <= drawingStatusIndex ? new Date(o.orderDate.getTime() + i * 7 * 86400000) : null,
+            endDate: (i < drawingStatusIndex || o.overallStatus === "COMPLETED") ? new Date(o.orderDate.getTime() + (i + 1) * 7 * 86400000) : null,
+            deadline: stageDeadline,
+          },
+        });
+      }
     }
 
-    console.log(`✅ Order created: ${o.poNumber}`);
+    console.log(`✅ Order created with 2 drawings: ${o.poNumber}`);
   }
 
   console.log("🎉 Seeding complete!");

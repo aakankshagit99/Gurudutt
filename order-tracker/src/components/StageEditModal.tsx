@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { updateStage } from "@/lib/actions";
+import { updateDrawingStage } from "@/lib/actions";
 import { StageStatus } from "@prisma/client";
 import { X, Loader2 } from "lucide-react";
 import { toast } from "sonner";
@@ -12,23 +12,25 @@ interface Stage {
   stageName: string;
   startDate: Date | null;
   endDate: Date | null;
+  deadline?: Date | null;
   status: StageStatus;
   assignedTo: string | null;
   remarks: string | null;
 }
 
 interface Props {
-  orderId: string;
+  drawingId: string;
   stage: Stage;
   users: { id: string; name: string }[];
   onClose: () => void;
 }
 
-export default function StageEditModal({ orderId, stage, users, onClose }: Props) {
+export default function StageEditModal({ drawingId, stage, users, onClose }: Props) {
   const [isPending, startTransition] = useTransition();
   const [form, setForm] = useState({
     startDate: stage.startDate ? new Date(stage.startDate).toISOString().split("T")[0] : "",
     endDate: stage.endDate ? new Date(stage.endDate).toISOString().split("T")[0] : "",
+    deadline: stage.deadline ? new Date(stage.deadline).toISOString().split("T")[0] : "",
     status: stage.status,
     assignedTo: stage.assignedTo || "",
     remarks: stage.remarks || "",
@@ -42,11 +44,12 @@ export default function StageEditModal({ orderId, stage, users, onClose }: Props
     e.preventDefault();
     startTransition(async () => {
       try {
-        await updateStage({
-          orderId,
+        await updateDrawingStage({
+          drawingId,
           stageName: stage.stageName,
           startDate: form.startDate || null,
           endDate: form.endDate || null,
+          deadline: form.deadline || null,
           status: form.status,
           assignedTo: form.assignedTo || null,
           remarks: form.remarks || null,
@@ -91,6 +94,11 @@ export default function StageEditModal({ orderId, stage, users, onClose }: Props
               <label className="block text-xs font-medium text-slate-400 mb-1.5">End Date</label>
               <input type="date" name="endDate" value={form.endDate} onChange={handleChange} className="input-field" />
             </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-1.5">Stage Deadline</label>
+            <input type="date" name="deadline" value={form.deadline} onChange={handleChange} className="input-field" />
           </div>
 
           <div>

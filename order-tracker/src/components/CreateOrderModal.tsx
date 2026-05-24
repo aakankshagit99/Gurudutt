@@ -16,6 +16,7 @@ export default function CreateOrderModal({ onClose }: Props) {
   const [customers, setCustomers] = useState<Awaited<ReturnType<typeof getCustomers>>>([]);
   const [availableStages, setAvailableStages] = useState<string[]>([]);
   const [selectedStages, setSelectedStages] = useState<string[]>([]);
+  const [drawingInput, setDrawingInput] = useState("");
   const [form, setForm] = useState({
     customerId: "",
     projectName: "",
@@ -51,13 +52,21 @@ export default function CreateOrderModal({ onClose }: Props) {
       toast.error("Please select a customer");
       return;
     }
+    const drawingNumbers = drawingInput
+      .split(/[\n,]+/)
+      .map((d) => d.trim())
+      .filter((d) => d.length > 0);
+    if (drawingNumbers.length === 0) {
+      toast.error("Please enter at least one drawing number");
+      return;
+    }
     if (selectedStages.length === 0) {
       toast.error("Please select at least one stage");
       return;
     }
     startTransition(async () => {
       try {
-        await createOrder({ ...form, stageNames: selectedStages });
+        await createOrder({ ...form, stageNames: selectedStages, drawingNumbers });
         toast.success("Order created successfully!");
         onClose();
       } catch (err: unknown) {
@@ -112,6 +121,18 @@ export default function CreateOrderModal({ onClose }: Props) {
           <div>
             <label className="block text-xs font-medium text-slate-400 mb-1.5 uppercase tracking-wider">Project Name *</label>
             <input name="projectName" value={form.projectName} onChange={handleChange} required className="input-field" placeholder="Steel Frame Assembly" />
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-1.5 uppercase tracking-wider">Drawings * (one per line or comma-separated)</label>
+            <textarea
+              name="drawings"
+              value={drawingInput}
+              onChange={(e) => setDrawingInput(e.target.value)}
+              required
+              className="input-field resize-none h-24 font-mono text-sm"
+              placeholder="e.g.&#10;DRW-101&#10;DRW-102&#10;DRW-103"
+            />
           </div>
 
           <div className="grid grid-cols-3 gap-4">

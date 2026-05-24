@@ -95,3 +95,64 @@ export function calculateOverallStatus(stages: { status: StageStatus; stageName:
 
   return "NOT_STARTED";
 }
+
+export function computeAggregatedStages(drawings: any[]): any[] {
+  if (!drawings || drawings.length === 0) return [];
+  
+  const stageMap = new Map<string, { sequence: number; stages: any[] }>();
+  
+  for (const drw of drawings) {
+    if (!drw.stages) continue;
+    for (const stg of drw.stages) {
+      const existing = stageMap.get(stg.stageName);
+      if (existing) {
+        existing.stages.push(stg);
+      } else {
+        stageMap.set(stg.stageName, {
+          sequence: stg.sequence,
+          stages: [stg],
+        });
+      }
+    }
+  }
+
+  const sortedStages = Array.from(stageMap.entries()).sort(
+    (a, b) => a[1].sequence - b[1].sequence
+  );
+
+  return sortedStages.map(([stageName, { sequence, stages }]) => {
+    let status: StageStatus = "NOT_STARTED";
+    const statuses = stages.map(s => s.status);
+    
+    if (statuses.every(s => s === "COMPLETED")) {
+      status = "COMPLETED";
+    } else if (statuses.some(s => s === "DELAYED")) {
+      status = "DELAYED";
+    } else if (statuses.some(s => s === "IN_PROGRESS" || s === "COMPLETED")) {
+      status = "IN_PROGRESS";
+    }
+
+    const startDates = stages.map(s => s.startDate).filter(Boolean);
+    const endDates = stages.map(s => s.endDate).filter(Boolean);
+
+    const startDate = startDates.length > 0 ? new Date(Math.min(...startDates.map((d: any) => new Date(d).getTime()))) : null;
+    const endDate = status === "COMPLETED" && endDates.length === stages.length
+      ? new Date(Math.max(...endDates.map((d: any) => new Date(d).getTime())))
+      : null;
+
+    const assignedIds = Array.from(new Set(stages.map(s => s.assignedTo).filter(Boolean)));
+    const assignedTo = assignedIds.length === 1 ? assignedIds[0] as string : null;
+    const assignedUser = assignedTo ? stages.find(s => s.assignedTo === assignedTo)?.assignedUser : null;
+
+    return {
+      id: `agg-${stageName}`,
+      stageName,
+      sequence,
+      startDate,
+      endDate,
+      status,
+      assignedTo,
+      assignedUser,
+    };
+  });
+}

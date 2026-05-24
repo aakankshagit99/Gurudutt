@@ -17,13 +17,26 @@ export async function createAuditLog({
   newValues?: Record<string, unknown>;
 }) {
   const session = await auth();
+  const userId = session?.user?.id;
+  
+  let validUserId: string | undefined = undefined;
+  if (userId) {
+    const userExists = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true },
+    });
+    if (userExists) {
+      validUserId = userId;
+    }
+  }
+
   await prisma.auditLog.create({
     data: {
       action,
       entityType,
       entityId,
       orderId,
-      userId: session?.user?.id,
+      userId: validUserId,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       oldValues: (oldValues as any) ?? undefined,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
