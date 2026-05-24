@@ -15,7 +15,7 @@ model User {
   department   String?
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
-  orderStages  OrderStage[]
+  drawingStages DrawingStage[]
   auditLogs    AuditLog[]
 
   @@map("users")
@@ -46,7 +46,7 @@ model Order {
   notes          String?
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
-  stages         OrderStage[]
+  drawings       Drawing[]
   auditLogs      AuditLog[]
 
   customer       Customer?     @relation(fields: [customerId], references: [id], onDelete: SetNull)
@@ -54,24 +54,41 @@ model Order {
   @@map("orders")
 }
 
-model OrderStage {
+model Drawing {
+  id            String         @id @default(cuid())
+  orderId       String
+  drawingNumber String
+  revision      String?        @default("0")
+  status        String         @default("NOT_STARTED")
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  order         Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  stages        DrawingStage[]
+
+  @@unique([orderId, drawingNumber])
+  @@map("drawings")
+}
+
+model DrawingStage {
   id          String      @id @default(cuid())
-  orderId     String
+  drawingId   String
   stageName   String
   sequence    Int         @default(0)
   startDate   DateTime?
   endDate     DateTime?
+  deadline    DateTime?
   status      StageStatus @default(NOT_STARTED)
   assignedTo  String?
   remarks     String?
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @updatedAt
 
-  order       Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  drawing     Drawing     @relation(fields: [drawingId], references: [id], onDelete: Cascade)
   assignedUser User?      @relation(fields: [assignedTo], references: [id], onDelete: SetNull)
 
-  @@unique([orderId, stageName])
-  @@map("order_stages")
+  @@unique([drawingId, stageName])
+  @@map("drawing_stages")
 }
 
 model AuditLog {

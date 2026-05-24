@@ -161,15 +161,14 @@ export default async function DashboardPage() {
 
                     {/* Stage pipeline */}
                     <div className="mb-2">
-                      <div className="flex gap-1">
-                        {["ORDER_RECEIVED", "DESIGN", "PROCUREMENT", "MANUFACTURING", "DISPATCH"].map((stage) => {
-                          const s = order.stages.find((st: { stageName: string; status: string }) => st.stageName === stage);
-                          const color = stageColors[s?.status as keyof typeof stageColors] || "bg-slate-700";
+                      <div className="flex gap-1 flex-wrap">
+                        {order.stages.map((s: { stageName: string; status: string }) => {
+                          const color = stageColors[s.status as keyof typeof stageColors] || "bg-slate-700";
                           return (
                             <div
-                              key={stage}
-                              className={`flex-1 h-1.5 rounded-full ${color} transition-all`}
-                              title={`${getStatusLabel(stage)}: ${getStatusLabel(s?.status || "NOT_STARTED")}`}
+                              key={s.stageName}
+                              className={`flex-1 h-1.5 min-w-[20px] rounded-full ${color} transition-all`}
+                              title={`${getStatusLabel(s.stageName)}: ${getStatusLabel(s.status || "NOT_STARTED")}`}
                             />
                           );
                         })}

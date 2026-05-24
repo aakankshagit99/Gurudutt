@@ -5,10 +5,9 @@ import { getOrders } from "@/lib/actions";
 import { formatDate, getDaysRemaining, getStatusColor, getStatusLabel, getPriorityColor } from "@/lib/utils";
 import {
   Plus, Search, Download, RefreshCw,
-  ChevronLeft, ChevronRight, ExternalLink, Zap, Edit2
+  ChevronLeft, ChevronRight, ExternalLink, Zap
 } from "lucide-react";
 import Link from "next/link";
-import EditOrderModal from "@/components/EditOrderModal";
 import * as XLSX from "xlsx";
 
 type Order = Awaited<ReturnType<typeof getOrders>>["orders"][0];
@@ -23,7 +22,6 @@ export default function OrdersClient({ initialOrders, initialTotal }: {
   const [status, setStatus] = useState("");
   const [priority, setPriority] = useState("");
   const [page, setPage] = useState(1);
-  const [editOrder, setEditOrder] = useState<Order | null>(null);
   const [isPending, startTransition] = useTransition();
   const pageSize = 20;
 
@@ -179,7 +177,12 @@ export default function OrdersClient({ initialOrders, initialTotal }: {
                       <span className="font-mono text-xs text-slate-400">{order.poNumber}</span>
                     </td>
                     <td>
-                      <p className="font-medium text-white">{order.projectName}</p>
+                      <Link 
+                        href={`/orders/${order.id}`}
+                        className="font-medium text-white hover:text-blue-400 transition-colors"
+                      >
+                        {order.projectName}
+                      </Link>
                       <p className="text-xs text-slate-500">{order.customer?.name || "No Customer"}</p>
                     </td>
                     <td>
@@ -194,14 +197,13 @@ export default function OrdersClient({ initialOrders, initialTotal }: {
                       </span>
                     </td>
                     <td>
-                      <div className="flex gap-0.5">
-                        {["ORDER_RECEIVED", "DESIGN", "PROCUREMENT", "MANUFACTURING", "DISPATCH"].map((stage) => {
-                          const s = order.stages.find((st: { stageName: string; status: string }) => st.stageName === stage);
+                      <div className="flex gap-0.5 flex-wrap max-w-[150px]">
+                        {order.stages.map((s: { stageName: string; status: string }) => {
                           return (
                             <div
-                              key={stage}
-                              className={`w-6 h-1.5 rounded-full ${stageColors[s?.status || "NOT_STARTED"]}`}
-                              title={`${getStatusLabel(stage)}: ${getStatusLabel(s?.status || "NOT_STARTED")}`}
+                              key={s.stageName}
+                              className={`w-6 h-1.5 rounded-full ${stageColors[s.status || "NOT_STARTED"]}`}
+                              title={`${getStatusLabel(s.stageName)}: ${getStatusLabel(s.status || "NOT_STARTED")}`}
                             />
                           );
                         })}
@@ -215,17 +217,10 @@ export default function OrdersClient({ initialOrders, initialTotal }: {
                     </td>
                     <td>
                       <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => setEditOrder(order)}
-                          className="text-slate-500 hover:text-blue-400 transition-colors"
-                          title="Edit order"
-                        >
-                          <Edit2 className="w-4 h-4" />
-                        </button>
                         <Link
                           href={`/orders/${order.id}`}
                           className="text-slate-500 hover:text-blue-400 transition-colors"
-                          title="View order"
+                          title="View order details"
                         >
                           <ExternalLink className="w-4 h-4" />
                         </Link>
@@ -265,13 +260,6 @@ export default function OrdersClient({ initialOrders, initialTotal }: {
         </div>
       )}
 
-      {editOrder && (
-        <EditOrderModal
-          order={editOrder}
-          onClose={() => setEditOrder(null)}
-          onSuccess={() => fetchOrders()}
-        />
-      )}
     </div>
   );
 }

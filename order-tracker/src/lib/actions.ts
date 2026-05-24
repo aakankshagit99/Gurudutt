@@ -7,7 +7,7 @@ import { prisma } from "@/lib/prisma";
 import { auth } from "@/lib/auth";
 import { revalidatePath } from "next/cache";
 import { createAuditLog } from "@/lib/audit";
-import { calculateOverallStatus } from "@/lib/utils";
+import { calculateOverallStatus, computeAggregatedStages } from "@/lib/utils";
 import { z } from "zod";
 import { Priority, StageStatus } from "@prisma/client";
 
@@ -31,14 +31,16 @@ const OrderSchema = z.object({
   deadline: z.string(),
   priority: z.nativeEnum(Priority),
   notes: z.string().optional(),
-  stageNames: z.array(z.string()).min(1), // Required stages for this order
+  stageNames: z.array(z.string()).min(1),
+  drawingNumbers: z.array(z.string()).min(1),
 });
 
 const StageSchema = z.object({
-  orderId: z.string(),
+  drawingId: z.string(),
   stageName: z.string(),
   startDate: z.string().optional().nullable(),
   endDate: z.string().optional().nullable(),
+  deadline: z.string().optional().nullable(),
   status: z.nativeEnum(StageStatus),
   assignedTo: z.string().optional().nullable(),
   remarks: z.string().optional().nullable(),
@@ -72,14 +74,19 @@ export async function getOrders(params?: {
   if (status) where.overallStatus = status;
   if (priority) where.priority = priority as any;
 
-  const [orders, total] = await Promise.all([
+  const [ordersRaw, total] = await Promise.all([
     prisma.order.findMany({
       where,
       include: {
         customer: { select: { name: true } },
-        stages: {
-          include: { assignedUser: { select: { id: true, name: true } } },
-          orderBy: { sequence: "asc" },
+        drawings: {
+          include: {
+            stages: {
+              include: { assignedUser: { select: { id: true, name: true } } },
+              orderBy: { sequence: "asc" },
+            },
+          },
+          orderBy: { drawingNumber: "asc" },
         },
       },
       orderBy: { deadline: "asc" },
@@ -89,18 +96,28 @@ export async function getOrders(params?: {
     prisma.order.count({ where }),
   ]);
 
+  const orders = ordersRaw.map((o) => ({
+    ...o,
+    stages: computeAggregatedStages(o.drawings),
+  }));
+
   return { orders, total, page, pageSize };
 }
 
 export async function getOrderById(id: string) {
   await requireAuth();
-  return prisma.order.findUnique({
+  const order = await prisma.order.findUnique({
     where: { id },
     include: {
       customer: { select: { name: true } },
-      stages: {
-        include: { assignedUser: { select: { id: true, name: true, email: true } } },
-        orderBy: { createdAt: "asc" },
+      drawings: {
+        include: {
+          stages: {
+            include: { assignedUser: { select: { id: true, name: true, email: true } } },
+            orderBy: { sequence: "asc" },
+          },
+        },
+        orderBy: { drawingNumber: "asc" },
       },
       auditLogs: {
         include: { user: { select: { id: true, name: true } } },
@@ -109,6 +126,13 @@ export async function getOrderById(id: string) {
       },
     },
   });
+
+  if (!order) return null;
+
+  return {
+    ...order,
+    stages: computeAggregatedStages(order.drawings),
+  };
 }
 
 export async function createOrder(data: z.infer<typeof OrderSchema>) {
@@ -124,11 +148,17 @@ export async function createOrder(data: z.infer<typeof OrderSchema>) {
       deadline: new Date(parsed.deadline),
       priority: parsed.priority,
       notes: parsed.notes,
-      stages: {
-        create: parsed.stageNames.map((name, idx) => ({
-          stageName: name,
-          sequence: idx,
+      drawings: {
+        create: parsed.drawingNumbers.map((num) => ({
+          drawingNumber: num.trim(),
           status: "NOT_STARTED",
+          stages: {
+            create: parsed.stageNames.map((name, idx) => ({
+              stageName: name,
+              sequence: idx,
+              status: "NOT_STARTED",
+            })),
+          },
         })),
       },
     },
@@ -198,21 +228,22 @@ export async function deleteOrder(id: string) {
   return { success: true };
 }
 
-export async function updateStage(data: z.infer<typeof StageSchema>) {
+export async function updateDrawingStage(data: z.infer<typeof StageSchema>) {
   await requireAuth();
   const parsed = StageSchema.parse(data);
 
-  const existingStage = await prisma.orderStage.findUnique({
-    where: { orderId_stageName: { orderId: parsed.orderId, stageName: parsed.stageName } },
+  const existingStage = await prisma.drawingStage.findUnique({
+    where: { drawingId_stageName: { drawingId: parsed.drawingId, stageName: parsed.stageName } },
   });
 
-  const stage = await prisma.orderStage.upsert({
-    where: { orderId_stageName: { orderId: parsed.orderId, stageName: parsed.stageName } },
+  const stage = await prisma.drawingStage.upsert({
+    where: { drawingId_stageName: { drawingId: parsed.drawingId, stageName: parsed.stageName } },
     create: {
-      orderId: parsed.orderId,
+      drawingId: parsed.drawingId,
       stageName: parsed.stageName,
       startDate: parsed.startDate ? new Date(parsed.startDate) : null,
       endDate: parsed.endDate ? new Date(parsed.endDate) : null,
+      deadline: parsed.deadline ? new Date(parsed.deadline) : null,
       status: parsed.status,
       assignedTo: parsed.assignedTo || null,
       remarks: parsed.remarks || null,
@@ -220,95 +251,249 @@ export async function updateStage(data: z.infer<typeof StageSchema>) {
     update: {
       startDate: parsed.startDate ? new Date(parsed.startDate) : null,
       endDate: parsed.endDate ? new Date(parsed.endDate) : null,
+      deadline: parsed.deadline ? new Date(parsed.deadline) : null,
       status: parsed.status,
       assignedTo: parsed.assignedTo || null,
       remarks: parsed.remarks || null,
     },
   });
 
-  const allStages = await prisma.orderStage.findMany({ 
-    where: { orderId: parsed.orderId },
-    orderBy: { sequence: "asc" } 
+  const allStages = await prisma.drawingStage.findMany({
+    where: { drawingId: parsed.drawingId },
+    orderBy: { sequence: "asc" },
   });
-  const newOverallStatus = calculateOverallStatus(allStages.map((s: { status: StageStatus; stageName: string }) => ({ status: s.status, stageName: s.stageName })));
 
-  await prisma.order.update({ where: { id: parsed.orderId }, data: { overallStatus: newOverallStatus } });
+  const newDrawingStatus = calculateOverallStatus(
+    allStages.map((s) => ({ status: s.status, stageName: s.stageName }))
+  );
+
+  const drawing = await prisma.drawing.update({
+    where: { id: parsed.drawingId },
+    data: { status: newDrawingStatus },
+  });
+
+  const drawingsInPo = await prisma.drawing.findMany({
+    where: { orderId: drawing.orderId },
+    include: { stages: { orderBy: { sequence: "asc" } } },
+  });
+
+  const aggregatedStages = computeAggregatedStages(drawingsInPo);
+  const newOverallStatus = calculateOverallStatus(
+    aggregatedStages.map((s) => ({ status: s.status, stageName: s.stageName }))
+  );
+
+  await prisma.order.update({
+    where: { id: drawing.orderId },
+    data: { overallStatus: newOverallStatus },
+  });
 
   await createAuditLog({
     action: "UPDATE_STAGE",
-    entityType: "OrderStage",
+    entityType: "DrawingStage",
     entityId: stage.id,
-    orderId: parsed.orderId,
+    orderId: drawing.orderId,
     oldValues: existingStage as Record<string, unknown>,
     newValues: parsed as Record<string, unknown>,
   });
 
   revalidatePath("/dashboard");
   revalidatePath("/orders");
-  revalidatePath(`/orders/${parsed.orderId}`);
+  revalidatePath(`/orders/${drawing.orderId}`);
+  revalidatePath("/kanban");
   return { success: true, stage };
 }
 
-export async function addStageToOrder(orderId: string, stageName: string) {
+export async function createDrawing(orderId: string, drawingNumber: string) {
   await requireAuth();
-  
-  const lastStage = await prisma.orderStage.findFirst({
+
+  const existingDrawing = await prisma.drawing.findFirst({
     where: { orderId },
+    include: { stages: { orderBy: { sequence: "asc" } } },
+  });
+
+  let stageNames = ["ORDER_RECEIVED", "DESIGN", "PROCUREMENT", "MANUFACTURING", "DISPATCH"];
+  if (existingDrawing && existingDrawing.stages.length > 0) {
+    stageNames = existingDrawing.stages.map((s) => s.stageName);
+  }
+
+  const drawing = await prisma.drawing.create({
+    data: {
+      orderId,
+      drawingNumber: drawingNumber.trim(),
+      status: "NOT_STARTED",
+      stages: {
+        create: stageNames.map((name, idx) => ({
+          stageName: name,
+          sequence: idx,
+          status: "NOT_STARTED",
+        })),
+      },
+    },
+  });
+
+  const drawingsInPo = await prisma.drawing.findMany({
+    where: { orderId },
+    include: { stages: { orderBy: { sequence: "asc" } } },
+  });
+
+  const aggregatedStages = computeAggregatedStages(drawingsInPo);
+  const newOverallStatus = calculateOverallStatus(
+    aggregatedStages.map((s) => ({ status: s.status, stageName: s.stageName }))
+  );
+
+  await prisma.order.update({
+    where: { id: orderId },
+    data: { overallStatus: newOverallStatus },
+  });
+
+  await createAuditLog({
+    action: "CREATE_DRAWING",
+    entityType: "Drawing",
+    entityId: drawing.id,
+    orderId,
+    newValues: { drawingNumber },
+  });
+
+  revalidatePath(`/orders/${orderId}`);
+  revalidatePath("/dashboard");
+  revalidatePath("/orders");
+  revalidatePath("/kanban");
+  return { success: true, drawing };
+}
+
+export async function deleteDrawing(drawingId: string) {
+  await requireAuth();
+
+  const drawing = await prisma.drawing.findUnique({
+    where: { id: drawingId },
+  });
+  if (!drawing) throw new Error("Drawing not found");
+
+  await prisma.drawing.delete({
+    where: { id: drawingId },
+  });
+
+  const drawingsInPo = await prisma.drawing.findMany({
+    where: { orderId: drawing.orderId },
+    include: { stages: { orderBy: { sequence: "asc" } } },
+  });
+
+  const aggregatedStages = computeAggregatedStages(drawingsInPo);
+  const newOverallStatus = calculateOverallStatus(
+    aggregatedStages.map((s) => ({ status: s.status, stageName: s.stageName }))
+  );
+
+  await prisma.order.update({
+    where: { id: drawing.orderId },
+    data: { overallStatus: newOverallStatus },
+  });
+
+  await createAuditLog({
+    action: "DELETE_DRAWING",
+    entityType: "Drawing",
+    entityId: drawingId,
+    orderId: drawing.orderId,
+    oldValues: drawing as Record<string, unknown>,
+  });
+
+  revalidatePath(`/orders/${drawing.orderId}`);
+  revalidatePath("/dashboard");
+  revalidatePath("/orders");
+  revalidatePath("/kanban");
+  return { success: true };
+}
+
+export async function addStageToDrawing(drawingId: string, stageName: string) {
+  await requireAuth();
+
+  const lastStage = await prisma.drawingStage.findFirst({
+    where: { drawingId },
     orderBy: { sequence: "desc" },
   });
 
-  const stage = await prisma.orderStage.create({
+  const stage = await prisma.drawingStage.create({
     data: {
-      orderId,
+      drawingId,
       stageName,
       sequence: (lastStage?.sequence ?? -1) + 1,
       status: "NOT_STARTED",
     },
   });
 
-  await createAuditLog({
-    action: "ADD_STAGE",
-    entityType: "OrderStage",
-    entityId: stage.id,
-    orderId,
-    newValues: { stageName },
+  const updatedStages = await prisma.drawingStage.findMany({
+    where: { drawingId },
+    orderBy: { sequence: "asc" },
+  });
+  const newDrawingStatus = calculateOverallStatus(updatedStages.map((s) => ({ status: s.status, stageName: s.stageName })));
+
+  const drawing = await prisma.drawing.update({
+    where: { id: drawingId },
+    data: { status: newDrawingStatus },
   });
 
-  revalidatePath(`/orders/${orderId}`);
+  const drawingsInPo = await prisma.drawing.findMany({
+    where: { orderId: drawing.orderId },
+    include: { stages: { orderBy: { sequence: "asc" } } },
+  });
+  const aggregatedStages = computeAggregatedStages(drawingsInPo);
+  const newOverallStatus = calculateOverallStatus(
+    aggregatedStages.map((s) => ({ status: s.status, stageName: s.stageName }))
+  );
+  await prisma.order.update({
+    where: { id: drawing.orderId },
+    data: { overallStatus: newOverallStatus },
+  });
+
+  revalidatePath(`/orders/${drawing.orderId}`);
   return { success: true, stage };
 }
 
-export async function removeStageFromOrder(stageId: string) {
+export async function removeStageFromDrawing(stageId: string) {
   await requireAuth();
 
-  const stage = await prisma.orderStage.findUnique({ where: { id: stageId } });
+  const stage = await prisma.drawingStage.findUnique({ where: { id: stageId } });
   if (!stage) throw new Error("Stage not found");
   if (stage.status === "COMPLETED") throw new Error("Cannot remove a completed stage");
 
-  await prisma.orderStage.delete({ where: { id: stageId } });
+  await prisma.drawingStage.delete({ where: { id: stageId } });
 
-  await createAuditLog({
-    action: "REMOVE_STAGE",
-    entityType: "OrderStage",
-    entityId: stageId,
-    orderId: stage.orderId,
-    oldValues: stage as Record<string, unknown>,
-  });
-
-  // Re-order remaining stages
-  const remaining = await prisma.orderStage.findMany({
-    where: { orderId: stage.orderId },
+  const remaining = await prisma.drawingStage.findMany({
+    where: { drawingId: stage.drawingId },
     orderBy: { sequence: "asc" },
   });
 
   for (let i = 0; i < remaining.length; i++) {
-    await prisma.orderStage.update({
+    await prisma.drawingStage.update({
       where: { id: remaining[i].id },
       data: { sequence: i },
     });
   }
 
-  revalidatePath(`/orders/${stage.orderId}`);
+  const updatedStages = await prisma.drawingStage.findMany({
+    where: { drawingId: stage.drawingId },
+    orderBy: { sequence: "asc" },
+  });
+  const newDrawingStatus = calculateOverallStatus(updatedStages.map((s) => ({ status: s.status, stageName: s.stageName })));
+
+  const drawing = await prisma.drawing.update({
+    where: { id: stage.drawingId },
+    data: { status: newDrawingStatus },
+  });
+
+  const drawingsInPo = await prisma.drawing.findMany({
+    where: { orderId: drawing.orderId },
+    include: { stages: { orderBy: { sequence: "asc" } } },
+  });
+  const aggregatedStages = computeAggregatedStages(drawingsInPo);
+  const newOverallStatus = calculateOverallStatus(
+    aggregatedStages.map((s) => ({ status: s.status, stageName: s.stageName }))
+  );
+  await prisma.order.update({
+    where: { id: drawing.orderId },
+    data: { overallStatus: newOverallStatus },
+  });
+
+  revalidatePath(`/orders/${drawing.orderId}`);
   return { success: true };
 }
 
@@ -324,7 +509,7 @@ export async function getDashboardStats() {
     delayedOrders,
     completedOrders,
     stageStats,
-    recentOrders,
+    recentOrdersRaw,
   ] = await Promise.all([
     prisma.order.count({ where: { overallStatus: { notIn: ["COMPLETED", "CANCELLED"] } } }),
     prisma.order.count({
@@ -340,17 +525,33 @@ export async function getDashboardStats() {
       },
     }),
     prisma.order.count({ where: { overallStatus: "COMPLETED" } }),
-    prisma.orderStage.groupBy({
+    prisma.drawingStage.groupBy({
       by: ["status"],
       _count: { status: true },
     }),
     prisma.order.findMany({
       where: { overallStatus: { notIn: ["COMPLETED", "CANCELLED"] } },
-      include: { stages: { orderBy: { sequence: "asc" } }, customer: { select: { name: true } } },
+      include: {
+        drawings: {
+          include: {
+            stages: {
+              include: { assignedUser: { select: { id: true, name: true } } },
+              orderBy: { sequence: "asc" },
+            },
+          },
+          orderBy: { drawingNumber: "asc" },
+        },
+        customer: { select: { name: true } },
+      },
       orderBy: { deadline: "asc" },
       take: 5,
     }),
   ]);
+
+  const recentOrders = recentOrdersRaw.map((o) => ({
+    ...o,
+    stages: computeAggregatedStages(o.drawings),
+  }));
 
   return {
     totalOrders,
@@ -446,51 +647,65 @@ export async function addAvailableStage(name: string) {
   return stages;
 }
 
-export async function moveOrderToStatus(orderId: string, targetStatus: string) {
+export async function moveDrawingToStatus(drawingId: string, targetStatus: string) {
   await requireAuth();
 
-  const order = await prisma.order.findUnique({
-    where: { id: orderId },
+  const drawing = await prisma.drawing.findUnique({
+    where: { id: drawingId },
     include: { stages: { orderBy: { sequence: "asc" } } },
   });
-  if (!order) throw new Error("Order not found");
+  if (!drawing) throw new Error("Drawing not found");
 
   const availableStages = await getAvailableStages();
 
   if (targetStatus === "COMPLETED") {
-    await prisma.orderStage.updateMany({
-      where: { orderId },
+    await prisma.drawingStage.updateMany({
+      where: { drawingId },
       data: { status: "COMPLETED", endDate: new Date() },
     });
+    await prisma.drawing.update({
+      where: { id: drawingId },
+      data: { status: "COMPLETED" },
+    });
+
+    // Recalculate PO overall status
+    const drawingsInPo = await prisma.drawing.findMany({
+      where: { orderId: drawing.orderId },
+      include: { stages: { orderBy: { sequence: "asc" } } },
+    });
+    const aggregatedStages = computeAggregatedStages(drawingsInPo);
+    const newOverallStatus = calculateOverallStatus(
+      aggregatedStages.map((s) => ({ status: s.status, stageName: s.stageName }))
+    );
     await prisma.order.update({
-      where: { id: orderId },
-      data: { overallStatus: "COMPLETED" },
+      where: { id: drawing.orderId },
+      data: { overallStatus: newOverallStatus },
     });
 
     await createAuditLog({
       action: "UPDATE_STATUS",
-      entityType: "Order",
-      entityId: orderId,
-      orderId,
-      newValues: { overallStatus: "COMPLETED" },
+      entityType: "Drawing",
+      entityId: drawingId,
+      orderId: drawing.orderId,
+      newValues: { status: "COMPLETED" },
     });
 
     revalidatePath("/dashboard");
     revalidatePath("/orders");
     revalidatePath("/kanban");
-    revalidatePath(`/orders/${orderId}`);
+    revalidatePath(`/orders/${drawing.orderId}`);
     return { success: true };
   }
 
-  let targetStage = order.stages.find((s) => s.stageName === targetStatus);
+  let targetStage = drawing.stages.find((s) => s.stageName === targetStatus);
 
   if (!targetStage) {
     const availableIndex = availableStages.indexOf(targetStatus);
-    const sequence = availableIndex !== -1 ? availableIndex : order.stages.length;
+    const sequence = availableIndex !== -1 ? availableIndex : drawing.stages.length;
 
-    targetStage = await prisma.orderStage.create({
+    targetStage = await prisma.drawingStage.create({
       data: {
-        orderId,
+        drawingId,
         stageName: targetStatus,
         sequence,
         status: "IN_PROGRESS",
@@ -498,28 +713,28 @@ export async function moveOrderToStatus(orderId: string, targetStatus: string) {
       },
     });
 
-    order.stages = await prisma.orderStage.findMany({
-      where: { orderId },
+    drawing.stages = await prisma.drawingStage.findMany({
+      where: { drawingId },
       orderBy: { sequence: "asc" },
     });
   }
 
-  for (const stage of order.stages) {
+  for (const stage of drawing.stages) {
     if (stage.stageName === targetStatus) {
-      await prisma.orderStage.update({
+      await prisma.drawingStage.update({
         where: { id: stage.id },
         data: { status: "IN_PROGRESS", startDate: stage.startDate || new Date(), endDate: null },
       });
     } else if (stage.sequence < targetStage.sequence) {
       if (stage.status !== "COMPLETED") {
-        await prisma.orderStage.update({
+        await prisma.drawingStage.update({
           where: { id: stage.id },
           data: { status: "COMPLETED", endDate: stage.endDate || new Date() },
         });
       }
     } else if (stage.sequence > targetStage.sequence) {
       if (stage.status !== "NOT_STARTED") {
-        await prisma.orderStage.update({
+        await prisma.drawingStage.update({
           where: { id: stage.id },
           data: { status: "NOT_STARTED", startDate: null, endDate: null },
         });
@@ -527,28 +742,42 @@ export async function moveOrderToStatus(orderId: string, targetStatus: string) {
     }
   }
 
-  const updatedStages = await prisma.orderStage.findMany({
-    where: { orderId },
+  const updatedStages = await prisma.drawingStage.findMany({
+    where: { drawingId },
     orderBy: { sequence: "asc" },
   });
-  const newOverallStatus = calculateOverallStatus(updatedStages.map((s) => ({ status: s.status, stageName: s.stageName })));
+  const newDrawingStatus = calculateOverallStatus(updatedStages.map((s) => ({ status: s.status, stageName: s.stageName })));
 
+  await prisma.drawing.update({
+    where: { id: drawingId },
+    data: { status: newDrawingStatus },
+  });
+
+  // Recalculate PO overall status
+  const drawingsInPo = await prisma.drawing.findMany({
+    where: { orderId: drawing.orderId },
+    include: { stages: { orderBy: { sequence: "asc" } } },
+  });
+  const aggregatedStages = computeAggregatedStages(drawingsInPo);
+  const newOverallStatus = calculateOverallStatus(
+    aggregatedStages.map((s) => ({ status: s.status, stageName: s.stageName }))
+  );
   await prisma.order.update({
-    where: { id: orderId },
+    where: { id: drawing.orderId },
     data: { overallStatus: newOverallStatus },
   });
 
   await createAuditLog({
     action: "UPDATE_STATUS",
-    entityType: "Order",
-    entityId: orderId,
-    orderId,
-    newValues: { overallStatus: newOverallStatus },
+    entityType: "Drawing",
+    entityId: drawingId,
+    orderId: drawing.orderId,
+    newValues: { status: newDrawingStatus },
   });
 
   revalidatePath("/dashboard");
   revalidatePath("/orders");
   revalidatePath("/kanban");
-  revalidatePath(`/orders/${orderId}`);
+  revalidatePath(`/orders/${drawing.orderId}`);
   return { success: true };
 }
